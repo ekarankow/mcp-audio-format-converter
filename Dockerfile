@@ -76,7 +76,7 @@ RUN mkdir -p /app/logs /app/data && \
 USER audioconv
 
 # Expose port
-EXPOSE 8002
+EXPOSE 8080
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
@@ -84,7 +84,7 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
 
 # Default environment variables
 ENV HOST=0.0.0.0
-ENV PORT=8002
+ENV PORT=8080
 ENV LOG_LEVEL=INFO
 ENV DEFAULT_SAMPLE_RATE=16000
 ENV DEFAULT_SAMPLE_WIDTH=2

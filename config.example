@@ -2,7 +2,7 @@
 
 # Server configuration
 HOST=localhost
-PORT=8002
+PORT=8080
 LOG_LEVEL=INFO
 
 # Audio conversion settings
