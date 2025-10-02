@@ -1,0 +1,16 @@
+# Example environment configuration for Audio Format Converter MCP Server
+
+# Server configuration
+HOST=localhost
+PORT=8002
+LOG_LEVEL=INFO
+
+# Audio conversion settings
+DEFAULT_SAMPLE_RATE=16000
+DEFAULT_SAMPLE_WIDTH=2
+DEFAULT_CHANNELS=1
+
+# Processing options
+ENABLE_PYDUB=true
+ENABLE_BUILTIN_FALLBACK=true
+MAX_AUDIO_SIZE_MB=100
