@@ -184,6 +184,7 @@ def get_audio_info(audio_segment) -> AudioInfo:
 
 @mcp.tool()
 def convert_to_mono_wav(audio_data_base64: str, target_sample_rate: int = 16000, target_sample_width: int = 2) -> Dict[str, Any]:
+    logger.info(f"Starting audio format conversion {audio_data_base64}")
     """
     Convert audio data to mono-channel WAV format with specified parameters.
     
