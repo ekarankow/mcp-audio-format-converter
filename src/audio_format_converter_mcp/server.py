@@ -182,57 +182,184 @@ def get_audio_info(audio_segment) -> AudioInfo:
     )
 
 
-@mcp.tool()
-def convert_to_mono_wav(audio_data_base64: str, target_sample_rate: int = 16000, target_sample_width: int = 2) -> Dict[str, Any]:
-    logger.info(f"Starting audio format conversion {audio_data_base64}")
+# @mcp.tool()
+# def convert_to_mono_wav(audio_data_base64: str, target_sample_rate: int = 16000, target_sample_width: int = 2) -> Dict[str, Any]:
+#     logger.info(f"Starting audio format conversion {audio_data_base64}")
+#     """
+#     Convert audio data to mono-channel WAV format with specified parameters.
+#
+#     Args:
+#         audio_data_base64 (str): Base64 encoded audio data
+#         target_sample_rate (int): Target sample rate in Hz (default: 16000)
+#         target_sample_width (int): Target sample width in bytes (default: 2 for 16-bit)
+#
+#     Returns:
+#         Dict[str, Any]: Response containing success status, converted audio data,
+#                        original and converted audio info, and error message if failed
+#     """
+#     try:
+#         logger.info("Starting audio format conversion")
+#
+#         # Decode base64 audio data
+#         try:
+#             audio_data = base64.b64decode(audio_data_base64)
+#             logger.info(f"Successfully decoded {len(audio_data)} bytes from base64")
+#         except Exception as e:
+#             error_msg = f"Failed to decode base64 audio data: {e}"
+#             logger.error(error_msg)
+#             return AudioConversionResponse(
+#                 success=False,
+#                 error_message=error_msg
+#             ).dict()
+#
+#         if len(audio_data) == 0:
+#             error_msg = "Decoded audio data is empty"
+#             logger.error(error_msg)
+#             return AudioConversionResponse(
+#                 success=False,
+#                 error_message=error_msg
+#             ).dict()
+#
+#         # Try to load audio with pydub first, then fallback to built-in
+#         audio = None
+#         original_info = None
+#
+#         try:
+#             from pydub import AudioSegment
+#             logger.info("Attempting to load audio with pydub")
+#
+#             # Write to temporary file for pydub
+#             with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+#                 temp_file.write(audio_data)
+#                 temp_path = temp_file.name
+#
+#             try:
+#                 audio = AudioSegment.from_file(temp_path)
+#                 logger.info("Successfully loaded audio file with pydub")
+#                 original_info = AudioInfo(
+#                     channels=audio.channels,
+#                     frame_rate=audio.frame_rate,
+#                     sample_width=audio.sample_width,
+#                     duration_ms=len(audio),
+#                     format="detected"
+#                 )
+#             finally:
+#                 os.unlink(temp_path)
+#
+#         except ImportError:
+#             logger.warning("pydub not available, trying built-in WAV processing")
+#         except Exception as e:
+#             logger.warning(f"pydub failed to load audio: {e}, trying built-in WAV processing")
+#
+#         # Fallback to built-in WAV processing if pydub failed
+#         if audio is None:
+#             try:
+#                 logger.info("Attempting built-in WAV processing")
+#                 audio = load_wav_with_builtin(audio_data)
+#                 logger.info("Successfully loaded audio with built-in WAV processing")
+#                 original_info = get_audio_info(audio)
+#             except Exception as e:
+#                 error_msg = f"Both pydub and built-in WAV processing failed: {e}"
+#                 logger.error(error_msg)
+#                 logger.error(f"Full traceback: {traceback.format_exc()}")
+#                 return AudioConversionResponse(
+#                     success=False,
+#                     error_message=error_msg
+#                 ).dict()
+#
+#         logger.info(f"Original audio format - Channels: {audio.channels}, Frame rate: {audio.frame_rate}, Sample width: {audio.sample_width}, Duration: {len(audio)}ms")
+#
+#         # Track if any conversion was performed
+#         conversion_performed = False
+#
+#         # Convert to mono if needed
+#         if audio.channels > 1:
+#             logger.info(f"Converting from {audio.channels} channels to mono")
+#             audio = audio.set_channels(1)
+#             conversion_performed = True
+#         else:
+#             logger.info("Audio is already mono")
+#
+#         # Set target sample rate
+#         if audio.frame_rate != target_sample_rate:
+#             logger.info(f"Converting sample rate from {audio.frame_rate}Hz to {target_sample_rate}Hz")
+#             audio = audio.set_frame_rate(target_sample_rate)
+#             conversion_performed = True
+#         else:
+#             logger.info(f"Audio is already at target sample rate ({target_sample_rate}Hz)")
+#
+#         # Set target sample width
+#         if audio.sample_width != target_sample_width:
+#             logger.info(f"Converting sample width from {audio.sample_width} bytes to {target_sample_width} bytes")
+#             audio = audio.set_sample_width(target_sample_width)
+#             conversion_performed = True
+#         else:
+#             logger.info(f"Audio is already at target sample width ({target_sample_width} bytes)")
+#
+#         converted_info = get_audio_info(audio)
+#         logger.info(f"Final audio format - Channels: {audio.channels}, Frame rate: {audio.frame_rate}, Sample width: {audio.sample_width}, Duration: {len(audio)}ms")
+#
+#         # Export as WAV bytes
+#         if hasattr(audio, 'export'):
+#             # pydub AudioSegment
+#             wav_data = audio.export(format="wav").read()
+#         else:
+#             # SimpleAudioSegment
+#             wav_data = audio.export_bytes("wav")
+#
+#         logger.info(f"Successfully exported {len(wav_data)} bytes as WAV")
+#
+#         # Encode as base64 for transport
+#         encoded_data = base64.b64encode(wav_data).decode('utf-8')
+#
+#         return AudioConversionResponse(
+#             success=True,
+#             data=encoded_data,
+#             original_info=original_info,
+#             converted_info=converted_info,
+#             conversion_performed=conversion_performed
+#         ).dict()
+#
+#     except Exception as e:
+#         error_msg = f"Unexpected error during audio conversion: {e}"
+#         logger.error(error_msg)
+#         logger.error(f"Full traceback: {traceback.format_exc()}")
+#         return AudioConversionResponse(
+#             success=False,
+#             error_message=error_msg
+#         ).dict()
+
+def convert_audio_bytes(audio_data: bytes, target_sample_rate: int = 16000, target_sample_width: int = 2) -> Dict[str, Any]:
     """
-    Convert audio data to mono-channel WAV format with specified parameters.
-    
+    Core logic for converting audio bytes to mono-channel WAV format.
+
     Args:
-        audio_data_base64 (str): Base64 encoded audio data
-        target_sample_rate (int): Target sample rate in Hz (default: 16000)
-        target_sample_width (int): Target sample width in bytes (default: 2 for 16-bit)
-        
+        audio_data (bytes): Raw audio data.
+        target_sample_rate (int): Target sample rate in Hz.
+        target_sample_width (int): Target sample width in bytes.
+
     Returns:
-        Dict[str, Any]: Response containing success status, converted audio data,
-                       original and converted audio info, and error message if failed
+        Dict[str, Any]: Audio conversion response.
     """
+    logger.info("Starting audio format conversion from bytes")
     try:
-        logger.info("Starting audio format conversion")
-        
-        # Decode base64 audio data
-        try:
-            audio_data = base64.b64decode(audio_data_base64)
-            logger.info(f"Successfully decoded {len(audio_data)} bytes from base64")
-        except Exception as e:
-            error_msg = f"Failed to decode base64 audio data: {e}"
-            logger.error(error_msg)
-            return AudioConversionResponse(
-                success=False,
-                error_message=error_msg
-            ).dict()
-        
         if len(audio_data) == 0:
-            error_msg = "Decoded audio data is empty"
+            error_msg = "Audio data is empty"
             logger.error(error_msg)
             return AudioConversionResponse(
                 success=False,
                 error_message=error_msg
             ).dict()
-        
-        # Try to load audio with pydub first, then fallback to built-in
+
         audio = None
         original_info = None
-        
+
         try:
             from pydub import AudioSegment
             logger.info("Attempting to load audio with pydub")
-            
-            # Write to temporary file for pydub
             with tempfile.NamedTemporaryFile(delete=False) as temp_file:
                 temp_file.write(audio_data)
                 temp_path = temp_file.name
-            
             try:
                 audio = AudioSegment.from_file(temp_path)
                 logger.info("Successfully loaded audio file with pydub")
@@ -245,13 +372,11 @@ def convert_to_mono_wav(audio_data_base64: str, target_sample_rate: int = 16000,
                 )
             finally:
                 os.unlink(temp_path)
-                
         except ImportError:
             logger.warning("pydub not available, trying built-in WAV processing")
         except Exception as e:
             logger.warning(f"pydub failed to load audio: {e}, trying built-in WAV processing")
-        
-        # Fallback to built-in WAV processing if pydub failed
+
         if audio is None:
             try:
                 logger.info("Attempting built-in WAV processing")
@@ -266,52 +391,42 @@ def convert_to_mono_wav(audio_data_base64: str, target_sample_rate: int = 16000,
                     success=False,
                     error_message=error_msg
                 ).dict()
-        
+
         logger.info(f"Original audio format - Channels: {audio.channels}, Frame rate: {audio.frame_rate}, Sample width: {audio.sample_width}, Duration: {len(audio)}ms")
-        
-        # Track if any conversion was performed
         conversion_performed = False
-        
-        # Convert to mono if needed
+
         if audio.channels > 1:
             logger.info(f"Converting from {audio.channels} channels to mono")
             audio = audio.set_channels(1)
             conversion_performed = True
         else:
             logger.info("Audio is already mono")
-        
-        # Set target sample rate
+
         if audio.frame_rate != target_sample_rate:
             logger.info(f"Converting sample rate from {audio.frame_rate}Hz to {target_sample_rate}Hz")
             audio = audio.set_frame_rate(target_sample_rate)
             conversion_performed = True
         else:
             logger.info(f"Audio is already at target sample rate ({target_sample_rate}Hz)")
-        
-        # Set target sample width
+
         if audio.sample_width != target_sample_width:
             logger.info(f"Converting sample width from {audio.sample_width} bytes to {target_sample_width} bytes")
             audio = audio.set_sample_width(target_sample_width)
             conversion_performed = True
         else:
             logger.info(f"Audio is already at target sample width ({target_sample_width} bytes)")
-        
+
         converted_info = get_audio_info(audio)
         logger.info(f"Final audio format - Channels: {audio.channels}, Frame rate: {audio.frame_rate}, Sample width: {audio.sample_width}, Duration: {len(audio)}ms")
-        
-        # Export as WAV bytes
+
         if hasattr(audio, 'export'):
-            # pydub AudioSegment
             wav_data = audio.export(format="wav").read()
         else:
-            # SimpleAudioSegment
             wav_data = audio.export_bytes("wav")
-        
+
         logger.info(f"Successfully exported {len(wav_data)} bytes as WAV")
-        
-        # Encode as base64 for transport
         encoded_data = base64.b64encode(wav_data).decode('utf-8')
-        
+
         return AudioConversionResponse(
             success=True,
             data=encoded_data,
@@ -319,7 +434,7 @@ def convert_to_mono_wav(audio_data_base64: str, target_sample_rate: int = 16000,
             converted_info=converted_info,
             conversion_performed=conversion_performed
         ).dict()
-        
+
     except Exception as e:
         error_msg = f"Unexpected error during audio conversion: {e}"
         logger.error(error_msg)
@@ -329,6 +444,85 @@ def convert_to_mono_wav(audio_data_base64: str, target_sample_rate: int = 16000,
             error_message=error_msg
         ).dict()
 
+
+@mcp.tool(
+    name="convert_to_mono_wav",
+    description="Convert base64-encoded audio data to a mono WAV file suitable for speech recognition."
+)
+def convert_to_mono_wav(
+    audio_data_base64: str,
+    target_sample_rate: int = 16000,
+    target_sample_width: int = 2
+) -> Dict[str, Any]:
+    """
+    Convert audio data (base64-encoded) to mono-channel WAV format.
+
+    Args:
+        audio_data_base64 (str): Base64-encoded audio data.
+        target_sample_rate (int): Target sample rate in Hz (default: 16000).
+        target_sample_width (int): Target sample width in bytes (default: 2 for 16-bit).
+
+    Returns:
+        Dict[str, Any]: Response containing:
+            - success (bool): Whether conversion was successful
+            - data (str, optional): Base64-encoded converted audio data
+            - original_info (AudioInfo, optional): Original audio format information
+            - converted_info (AudioInfo, optional): Converted audio format information
+            - conversion_performed (bool): Whether any conversion was necessary
+            - error_message (str): Error description if conversion failed
+    """
+    try:
+        audio_data = base64.b64decode(audio_data_base64)
+    except Exception as e:
+        error_msg = f"Failed to decode base64 audio data: {e}"
+        logger.error(error_msg)
+        return AudioConversionResponse(
+            success=False,
+            error_message=error_msg
+        ).dict()
+    return convert_audio_bytes(audio_data, target_sample_rate, target_sample_width)
+
+
+@mcp.tool(
+    name="convert_uri_to_mono_wav",
+    description="Fetch an audio file from a given URI and convert it to a mono WAV format optimized for speech recognition."
+)
+def convert_uri_to_mono_wav(
+    audio_uri: str,
+    target_sample_rate: int = 16000,
+    target_sample_width: int = 2
+) -> Dict[str, Any]:
+    """
+    Download audio from URI and convert to mono-channel WAV format.
+
+    Args:
+        audio_uri (str): URL to download the audio file from.
+        target_sample_rate (int): Target sample rate in Hz (default: 16000).
+        target_sample_width (int): Target sample width in bytes (default: 2 for 16-bit).
+
+    Returns:
+        Dict[str, Any]: Response containing:
+            - success (bool): Whether conversion was successful
+            - data (str, optional): Base64-encoded converted audio data
+            - original_info (AudioInfo, optional): Original audio format information
+            - converted_info (AudioInfo, optional): Converted audio format information
+            - conversion_performed (bool): Whether any conversion was necessary
+            - error_message (str): Error description if conversion failed
+    """
+    import requests
+    try:
+        logger.info(f"Downloading audio file from URI: {audio_uri}")
+        response = requests.get(audio_uri)
+        response.raise_for_status()
+        audio_data = response.content
+    except Exception as e:
+        error_msg = f"Failed to download audio from URI: {e}"
+        logger.error(error_msg)
+        return AudioConversionResponse(
+            success=False,
+            error_message=error_msg
+        ).dict()
+    return convert_audio_bytes(audio_data, target_sample_rate, target_sample_width)
 
 @mcp.tool()
 def validate_audio_format(audio_data_base64: str) -> Dict[str, Any]:
