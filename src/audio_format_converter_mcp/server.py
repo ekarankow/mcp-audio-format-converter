@@ -472,6 +472,7 @@ def convert_to_mono_wav(
             - error_message (str): Error description if conversion failed
     """
     try:
+        logger.info(f"Convert audio data (base64-encoded) to mono-channel WAV format: {audio_data_base64}")
         audio_data = base64.b64decode(audio_data_base64)
     except Exception as e:
         error_msg = f"Failed to decode base64 audio data: {e}"
