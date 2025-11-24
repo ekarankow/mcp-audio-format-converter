@@ -358,17 +358,18 @@ def convert_audio_bytes(filename: str, audio_data: bytes, target_sample_rate: in
         target_sample_width (int): Target sample width in bytes.
 
     Returns:
-        Dict[str, Any]: Audio conversion response.
+        Tuple[str, list]: Audio conversion response.
     """
     logger.info("Starting audio format conversion from bytes")
     try:
         if len(audio_data) == 0:
             error_msg = "Audio data is empty"
             logger.error(error_msg)
-            return AudioConversionResponse(
-                success=False,
-                error_message=error_msg
-            ).dict()
+            raise RuntimeError(error_msg)
+            # return AudioConversionResponse(
+            #     success=False,
+            #     error_message=error_msg
+            # ).dict()
 
         audio = None
         original_info = None
@@ -486,7 +487,7 @@ def convert_to_mono_wav(
     audio_data_base64: str,
     target_sample_rate: int = 16000,
     target_sample_width: int = 2
-) -> Dict[str, Any]:
+) -> tuple[str, list]:
     """
     Convert audio data (base64-encoded) to mono-channel WAV format.
 
@@ -497,17 +498,14 @@ def convert_to_mono_wav(
         target_sample_width (int): Target sample width in bytes (default: 2 for 16-bit).
 
     Returns:
-        Dict[str, Any]: Response containing:
-            - success (bool): Whether conversion was successful
-            - data (str, optional): Base64-encoded converted audio data
-            - original_info (AudioInfo, optional): Original audio format information
-            - converted_info (AudioInfo, optional): Converted audio format information
-            - conversion_performed (bool): Whether any conversion was necessary
-            - error_message (str): Error description if conversion failed
+        Tuple[str, list]: Response containing
     """
     try:
         logger.info(f"Convert audio data (base64-encoded) to mono-channel WAV format: {audio_data_base64}")
         audio_data = base64.b64decode(audio_data_base64)
+        logger.info(f"FileSize to convert:{len(audio_data)}")
+        with open("/tmp/output.wav", "wb") as f:
+            f.write(audio_data)
     except Exception as e:
         error_msg = f"Failed to decode base64 audio data: {e}"
         logger.error(error_msg)
@@ -574,7 +572,7 @@ def convert_uri_to_mono_wav(
         target_sample_rate: int = 16000,
         target_sample_width: int = 2,
         # request: Request = Depends()
-) -> Dict[str, Any]:
+) -> tuple[str, list]:
     """
     Download audio from URI and convert to mono-channel WAV format.
     Logs all incoming HTTP headers, passes Authorization header to download,
