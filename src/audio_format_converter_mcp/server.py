@@ -10,7 +10,7 @@ import argparse
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple
 import traceback
 import logging
 import sys
@@ -18,7 +18,12 @@ import base64
 import wave
 import audioop
 from mcp.server.fastmcp import FastMCP
-from pydantic import BaseModel
+from mcp.types import BlobResourceContents, EmbeddedResource
+from pydantic import BaseModel, FileUrl
+from fastapi import Request, Depends
+import requests
+from urllib.parse import urljoin, urlparse
+from fastmcp.server.dependencies import get_http_headers
 
 # Configure logging
 logging.basicConfig(
@@ -44,14 +49,14 @@ class AudioInfo(BaseModel):
     format: str
 
 
-class AudioConversionResponse(BaseModel):
-    """Response model for audio conversion."""
-    success: bool
-    data: Optional[str] = None  # Base64 encoded converted audio data
-    original_info: Optional[AudioInfo] = None
-    converted_info: Optional[AudioInfo] = None
-    conversion_performed: bool = False
-    error_message: str = ""
+# class AudioConversionResponse(BaseModel):
+#     """Response model for audio conversion."""
+#     success: bool
+#     data: Optional[str] = None  # Base64 encoded converted audio data
+#     original_info: Optional[AudioInfo] = None
+#     converted_info: Optional[AudioInfo] = None
+#     conversion_performed: bool = False
+#     error_message: str = ""
 
 
 def load_wav_with_builtin(wav_data: bytes) -> 'SimpleAudioSegment':
@@ -183,12 +188,13 @@ def get_audio_info(audio_segment) -> AudioInfo:
 
 
 # @mcp.tool()
-# def convert_to_mono_wav(audio_data_base64: str, target_sample_rate: int = 16000, target_sample_width: int = 2) -> Dict[str, Any]:
+# def convert_to_mono_wav(filename : str, audio_data_base64: str, target_sample_rate: int = 16000, target_sample_width: int = 2) -> Tuple[str, list]:
 #     logger.info(f"Starting audio format conversion {audio_data_base64}")
 #     """
 #     Convert audio data to mono-channel WAV format with specified parameters.
 #
 #     Args:
+#         filename (str): Name of file to be converted
 #         audio_data_base64 (str): Base64 encoded audio data
 #         target_sample_rate (int): Target sample rate in Hz (default: 16000)
 #         target_sample_width (int): Target sample width in bytes (default: 2 for 16-bit)
@@ -312,13 +318,25 @@ def get_audio_info(audio_segment) -> AudioInfo:
 #         # Encode as base64 for transport
 #         encoded_data = base64.b64encode(wav_data).decode('utf-8')
 #
-#         return AudioConversionResponse(
-#             success=True,
-#             data=encoded_data,
-#             original_info=original_info,
-#             converted_info=converted_info,
-#             conversion_performed=conversion_performed
-#         ).dict()
+#         # return AudioConversionResponse(
+#         #     success=True,
+#         #     data=encoded_data,
+#         #     original_info=original_info,
+#         #     converted_info=converted_info,
+#         #     conversion_performed=conversion_performed
+#         # ).dict()
+#         content_type = "audio/wav"
+#         converted_filename = f"converted_{filename}"
+#
+#         blob = BlobResourceContents(
+#             uri=FileUrl(f"file://{converted_filename}"),
+#             blob=encoded_data,
+#             mimeType=content_type
+#         )
+#
+#         resource = EmbeddedResource(type="resource", resource=blob)
+#         return [filename, resource]
+#
 #
 #     except Exception as e:
 #         error_msg = f"Unexpected error during audio conversion: {e}"
@@ -329,11 +347,12 @@ def get_audio_info(audio_segment) -> AudioInfo:
 #             error_message=error_msg
 #         ).dict()
 
-def convert_audio_bytes(audio_data: bytes, target_sample_rate: int = 16000, target_sample_width: int = 2) -> Dict[str, Any]:
+def convert_audio_bytes(filename: str, audio_data: bytes, target_sample_rate: int = 16000, target_sample_width: int = 2) -> Tuple[str, list]:
     """
     Core logic for converting audio bytes to mono-channel WAV format.
 
     Args:
+        filename (str): Name of file to be converted
         audio_data (bytes): Raw audio data.
         target_sample_rate (int): Target sample rate in Hz.
         target_sample_width (int): Target sample width in bytes.
@@ -387,10 +406,11 @@ def convert_audio_bytes(audio_data: bytes, target_sample_rate: int = 16000, targ
                 error_msg = f"Both pydub and built-in WAV processing failed: {e}"
                 logger.error(error_msg)
                 logger.error(f"Full traceback: {traceback.format_exc()}")
-                return AudioConversionResponse(
-                    success=False,
-                    error_message=error_msg
-                ).dict()
+                raise RuntimeError(error_msg)
+                # return AudioConversionResponse(
+                #     success=False,
+                #     error_message=error_msg
+                # ).dict()
 
         logger.info(f"Original audio format - Channels: {audio.channels}, Frame rate: {audio.frame_rate}, Sample width: {audio.sample_width}, Duration: {len(audio)}ms")
         conversion_performed = False
@@ -427,22 +447,34 @@ def convert_audio_bytes(audio_data: bytes, target_sample_rate: int = 16000, targ
         logger.info(f"Successfully exported {len(wav_data)} bytes as WAV")
         encoded_data = base64.b64encode(wav_data).decode('utf-8')
 
-        return AudioConversionResponse(
-            success=True,
-            data=encoded_data,
-            original_info=original_info,
-            converted_info=converted_info,
-            conversion_performed=conversion_performed
-        ).dict()
+        # return AudioConversionResponse(
+        #     success=True,
+        #     data=encoded_data,
+        #     original_info=original_info,
+        #     converted_info=converted_info,
+        #     conversion_performed=conversion_performed
+        # ).dict()
+        content_type = "audio/wav"
+        converted_filename = f"converted_{filename}"
+
+        blob = BlobResourceContents(
+            uri=FileUrl(f"file://{converted_filename}"),
+            blob=encoded_data,
+            mimeType=content_type
+        )
+
+        resource = EmbeddedResource(type="resource", resource=blob)
+        return [filename, resource]
 
     except Exception as e:
         error_msg = f"Unexpected error during audio conversion: {e}"
         logger.error(error_msg)
         logger.error(f"Full traceback: {traceback.format_exc()}")
-        return AudioConversionResponse(
-            success=False,
-            error_message=error_msg
-        ).dict()
+        raise RuntimeError(error_msg)
+        # return AudioConversionResponse(
+        #     success=False,
+        #     error_message=error_msg
+        # ).dict()
 
 
 @mcp.tool(
@@ -450,6 +482,7 @@ def convert_audio_bytes(audio_data: bytes, target_sample_rate: int = 16000, targ
     description="Convert base64-encoded audio data to a mono WAV file suitable for speech recognition."
 )
 def convert_to_mono_wav(
+    filename: str,
     audio_data_base64: str,
     target_sample_rate: int = 16000,
     target_sample_width: int = 2
@@ -458,6 +491,7 @@ def convert_to_mono_wav(
     Convert audio data (base64-encoded) to mono-channel WAV format.
 
     Args:
+        filename (str): Name of file to be converted
         audio_data_base64 (str): Base64-encoded audio data.
         target_sample_rate (int): Target sample rate in Hz (default: 16000).
         target_sample_width (int): Target sample width in bytes (default: 2 for 16-bit).
@@ -477,52 +511,111 @@ def convert_to_mono_wav(
     except Exception as e:
         error_msg = f"Failed to decode base64 audio data: {e}"
         logger.error(error_msg)
-        return AudioConversionResponse(
-            success=False,
-            error_message=error_msg
-        ).dict()
-    return convert_audio_bytes(audio_data, target_sample_rate, target_sample_width)
+        raise RuntimeError(error_msg)
+        # return AudioConversionResponse(
+        #     success=False,
+        #     error_message=error_msg
+        # ).dict()
+    return convert_audio_bytes(filename, audio_data, target_sample_rate, target_sample_width)
 
+def get_base_url():
+    return os.environ.get("CORE_BASE_URL", "https://statgpt-test.imf-eid.projects.epam.com/v1/")
+
+def is_absolute_url(url):
+    return bool(urlparse(url).netloc)
+
+# @mcp.tool(
+#     name="convert_uri_to_mono_wav",
+#     description="Fetch an audio file from a given URI and convert it to a mono WAV format optimized for speech recognition."
+# )
+# def convert_uri_to_mono_wav(
+#     audio_uri: str,
+#     target_sample_rate: int = 16000,
+#     target_sample_width: int = 2
+# ) -> Dict[str, Any]:
+#     """
+#     Download audio from URI and convert to mono-channel WAV format.
+#
+#     Args:
+#         audio_uri (str): URL to download the audio file from.
+#         target_sample_rate (int): Target sample rate in Hz (default: 16000).
+#         target_sample_width (int): Target sample width in bytes (default: 2 for 16-bit).
+#
+#     Returns:
+#         Dict[str, Any]: Response containing:
+#             - success (bool): Whether conversion was successful
+#             - data (str, optional): Base64-encoded converted audio data
+#             - original_info (AudioInfo, optional): Original audio format information
+#             - converted_info (AudioInfo, optional): Converted audio format information
+#             - conversion_performed (bool): Whether any conversion was necessary
+#             - error_message (str): Error description if conversion failed
+#     """
+#     import requests
+#     try:
+#         logger.info(f"Downloading audio file from URI: {audio_uri}")
+#         response = requests.get(audio_uri)
+#         response.raise_for_status()
+#         audio_data = response.content
+#     except Exception as e:
+#         error_msg = f"Failed to download audio from URI: {e}"
+#         logger.error(error_msg)
+#         return AudioConversionResponse(
+#             success=False,
+#             error_message=error_msg
+#         ).dict()
+#     return convert_audio_bytes(audio_data, target_sample_rate, target_sample_width)
 
 @mcp.tool(
     name="convert_uri_to_mono_wav",
     description="Fetch an audio file from a given URI and convert it to a mono WAV format optimized for speech recognition."
 )
 def convert_uri_to_mono_wav(
-    audio_uri: str,
-    target_sample_rate: int = 16000,
-    target_sample_width: int = 2
+        audio_uri: str,
+        target_sample_rate: int = 16000,
+        target_sample_width: int = 2,
+        # request: Request = Depends()
 ) -> Dict[str, Any]:
     """
     Download audio from URI and convert to mono-channel WAV format.
-
-    Args:
-        audio_uri (str): URL to download the audio file from.
-        target_sample_rate (int): Target sample rate in Hz (default: 16000).
-        target_sample_width (int): Target sample width in bytes (default: 2 for 16-bit).
-
-    Returns:
-        Dict[str, Any]: Response containing:
-            - success (bool): Whether conversion was successful
-            - data (str, optional): Base64-encoded converted audio data
-            - original_info (AudioInfo, optional): Original audio format information
-            - converted_info (AudioInfo, optional): Converted audio format information
-            - conversion_performed (bool): Whether any conversion was necessary
-            - error_message (str): Error description if conversion failed
+    Logs all incoming HTTP headers, passes Authorization header to download,
+    and prepends CORE_BASE_URL if URI is not absolute.
     """
-    import requests
     try:
-        logger.info(f"Downloading audio file from URI: {audio_uri}")
-        response = requests.get(audio_uri)
+        # Extract API key from X-API-KEY header
+        headers = get_http_headers()
+        api_key = headers.get("x-api-key")
+
+        # 1. Log all incoming HTTP headers
+        logger.info("Incoming HTTP headers:")
+        for k, v in headers.items():
+            logger.info(f"  {k}: {v}")
+
+        # 2. Pass Authorization header if present
+        new_headers = {}
+        if "authorization" in headers:
+            new_headers["Authorization"] = headers["authorization"]
+            logger.info("Passing Authorization header to download request.")
+
+        # 3. Prepend CORE_BASE_URL if URI is not absolute
+        base_url = get_base_url()
+        if not is_absolute_url(audio_uri) and base_url:
+            full_uri = urljoin(base_url, audio_uri)
+            logger.info(f"Prepended CORE_BASE_URL: {base_url} + {audio_uri} -> {full_uri}")
+        else:
+            full_uri = audio_uri
+
+        logger.info(f"Downloading audio file from URI: {full_uri}")
+        response = requests.get(full_uri, headers=new_headers)
         response.raise_for_status()
         audio_data = response.content
     except Exception as e:
         error_msg = f"Failed to download audio from URI: {e}"
         logger.error(error_msg)
-        return AudioConversionResponse(
-            success=False,
-            error_message=error_msg
-        ).dict()
+        raise RuntimeError(error_msg)
+        # return AudioConversionResponse(
+        #     success=False,
+        #     error_message=error_msg
+        # ).dict()
     return convert_audio_bytes(audio_data, target_sample_rate, target_sample_width)
 
 @mcp.tool()
@@ -614,10 +707,7 @@ def validate_audio_format(audio_data_base64: str) -> Dict[str, Any]:
         error_msg = f"Unexpected error during audio validation: {e}"
         logger.error(error_msg)
         logger.error(f"Full traceback: {traceback.format_exc()}")
-        return {
-            "success": False,
-            "error_message": error_msg
-        }
+        raise RuntimeError(error_msg)
 
 
 def setup_health_endpoint():
