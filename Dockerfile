@@ -49,7 +49,6 @@ RUN apt-get update && apt-get install -y \
     libavformat-dev \
     libavutil-dev \
     libswresample-dev \
-    ffprobe \
     # Network tools for debugging and health checks
     curl \
     netcat-openbsd \

@@ -18,6 +18,7 @@ dependencies = [
     "pydub>=0.25.1",
     "pydantic>=2.0.0",
     "requests>=2.31.0",
+    "ffprobe-python"
 ]
 
 [project.scripts]
