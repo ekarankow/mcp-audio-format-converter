@@ -347,7 +347,7 @@ def get_audio_info(audio_segment) -> AudioInfo:
 #             error_message=error_msg
 #         ).dict()
 
-def convert_audio_bytes(filename: str, audio_data: bytes, target_sample_rate: int = 16000, target_sample_width: int = 2) -> Tuple[str, list]:
+def convert_audio_bytes(filename: str, audio_data: bytes, target_sample_rate: int = 16000, target_sample_width: int = 2) -> EmbeddedResource:
     """
     Core logic for converting audio bytes to mono-channel WAV format.
 
@@ -465,7 +465,7 @@ def convert_audio_bytes(filename: str, audio_data: bytes, target_sample_rate: in
         )
 
         resource = EmbeddedResource(type="resource", resource=blob)
-        return [filename, resource]
+        return resource
 
     except Exception as e:
         error_msg = f"Unexpected error during audio conversion: {e}"
@@ -483,11 +483,11 @@ def convert_audio_bytes(filename: str, audio_data: bytes, target_sample_rate: in
     description="Convert base64-encoded audio data to a mono WAV file suitable for speech recognition."
 )
 def convert_to_mono_wav(
-    filename: str,
     audio_data_base64: str,
+    # filename: str,
     target_sample_rate: int = 16000,
     target_sample_width: int = 2
-) -> tuple[str, list]:
+) -> EmbeddedResource:
     """
     Convert audio data (base64-encoded) to mono-channel WAV format.
 
@@ -504,8 +504,8 @@ def convert_to_mono_wav(
         logger.info(f"Convert audio data (base64-encoded) to mono-channel WAV format: {audio_data_base64}")
         audio_data = base64.b64decode(audio_data_base64)
         logger.info(f"FileSize to convert:{len(audio_data)}")
-        with open("/tmp/output.wav", "wb") as f:
-            f.write(audio_data)
+        # with open("/tmp/output.wav", "wb") as f:
+        #     f.write(audio_data)
     except Exception as e:
         error_msg = f"Failed to decode base64 audio data: {e}"
         logger.error(error_msg)
@@ -514,7 +514,8 @@ def convert_to_mono_wav(
         #     success=False,
         #     error_message=error_msg
         # ).dict()
-    return convert_audio_bytes(filename, audio_data, target_sample_rate, target_sample_width)
+    # return convert_audio_bytes(filename, audio_data, target_sample_rate, target_sample_width)
+    return convert_audio_bytes("filename", audio_data, target_sample_rate, target_sample_width)
 
 def get_base_url():
     return os.environ.get("CORE_BASE_URL", "https://statgpt-test.imf-eid.projects.epam.com/v1/")
@@ -563,10 +564,10 @@ def is_absolute_url(url):
 #         ).dict()
 #     return convert_audio_bytes(audio_data, target_sample_rate, target_sample_width)
 
-@mcp.tool(
-    name="convert_uri_to_mono_wav",
-    description="Fetch an audio file from a given URI and convert it to a mono WAV format optimized for speech recognition."
-)
+# @mcp.tool(
+#     name="convert_uri_to_mono_wav",
+#     description="Fetch an audio file from a given URI and convert it to a mono WAV format optimized for speech recognition."
+# )
 def convert_uri_to_mono_wav(
         audio_uri: str,
         target_sample_rate: int = 16000,
