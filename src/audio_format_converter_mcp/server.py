@@ -10,15 +10,28 @@ import argparse
 import os
 import tempfile
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple, Annotated, Sequence
 import traceback
 import logging
 import sys
 import base64
 import wave
 import audioop
-from mcp.server.fastmcp import FastMCP
-from pydantic import BaseModel
+
+import fastmcp
+import fastmcp.server
+
+from fastmcp.tools import Tool
+# from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP, Context
+from mcp.types import BlobResourceContents, EmbeddedResource
+from pydantic import BaseModel, FileUrl, Field
+from fastapi import Request, Depends
+import requests
+from urllib.parse import urljoin, urlparse
+from fastmcp.server.dependencies import get_http_headers, get_http_request
+
+from fastmcp.server.middleware import Middleware, MiddlewareContext
 
 # Configure logging
 logging.basicConfig(
@@ -44,14 +57,14 @@ class AudioInfo(BaseModel):
     format: str
 
 
-class AudioConversionResponse(BaseModel):
-    """Response model for audio conversion."""
-    success: bool
-    data: Optional[str] = None  # Base64 encoded converted audio data
-    original_info: Optional[AudioInfo] = None
-    converted_info: Optional[AudioInfo] = None
-    conversion_performed: bool = False
-    error_message: str = ""
+# class AudioConversionResponse(BaseModel):
+#     """Response model for audio conversion."""
+#     success: bool
+#     data: Optional[str] = None  # Base64 encoded converted audio data
+#     original_info: Optional[AudioInfo] = None
+#     converted_info: Optional[AudioInfo] = None
+#     conversion_performed: bool = False
+#     error_message: str = ""
 
 
 def load_wav_with_builtin(wav_data: bytes) -> 'SimpleAudioSegment':
@@ -183,12 +196,13 @@ def get_audio_info(audio_segment) -> AudioInfo:
 
 
 # @mcp.tool()
-# def convert_to_mono_wav(audio_data_base64: str, target_sample_rate: int = 16000, target_sample_width: int = 2) -> Dict[str, Any]:
+# def convert_to_mono_wav(filename : str, audio_data_base64: str, target_sample_rate: int = 16000, target_sample_width: int = 2) -> Tuple[str, list]:
 #     logger.info(f"Starting audio format conversion {audio_data_base64}")
 #     """
 #     Convert audio data to mono-channel WAV format with specified parameters.
 #
 #     Args:
+#         filename (str): Name of file to be converted
 #         audio_data_base64 (str): Base64 encoded audio data
 #         target_sample_rate (int): Target sample rate in Hz (default: 16000)
 #         target_sample_width (int): Target sample width in bytes (default: 2 for 16-bit)
@@ -312,13 +326,25 @@ def get_audio_info(audio_segment) -> AudioInfo:
 #         # Encode as base64 for transport
 #         encoded_data = base64.b64encode(wav_data).decode('utf-8')
 #
-#         return AudioConversionResponse(
-#             success=True,
-#             data=encoded_data,
-#             original_info=original_info,
-#             converted_info=converted_info,
-#             conversion_performed=conversion_performed
-#         ).dict()
+#         # return AudioConversionResponse(
+#         #     success=True,
+#         #     data=encoded_data,
+#         #     original_info=original_info,
+#         #     converted_info=converted_info,
+#         #     conversion_performed=conversion_performed
+#         # ).dict()
+#         content_type = "audio/wav"
+#         converted_filename = f"converted_{filename}"
+#
+#         blob = BlobResourceContents(
+#             uri=FileUrl(f"file://{converted_filename}"),
+#             blob=encoded_data,
+#             mimeType=content_type
+#         )
+#
+#         resource = EmbeddedResource(type="resource", resource=blob)
+#         return [filename, resource]
+#
 #
 #     except Exception as e:
 #         error_msg = f"Unexpected error during audio conversion: {e}"
@@ -329,27 +355,36 @@ def get_audio_info(audio_segment) -> AudioInfo:
 #             error_message=error_msg
 #         ).dict()
 
-def convert_audio_bytes(audio_data: bytes, target_sample_rate: int = 16000, target_sample_width: int = 2) -> Dict[str, Any]:
+def convert_audio_bytes(filename: str, audio_data: bytes, target_sample_rate: int = 16000, target_sample_width: int = 2) -> tuple[str, EmbeddedResource]:
     """
     Core logic for converting audio bytes to mono-channel WAV format.
 
     Args:
+        filename (str): Name of file to be converted
         audio_data (bytes): Raw audio data.
         target_sample_rate (int): Target sample rate in Hz.
         target_sample_width (int): Target sample width in bytes.
 
     Returns:
-        Dict[str, Any]: Audio conversion response.
+        Tuple[str, list]: Audio conversion response.
     """
     logger.info("Starting audio format conversion from bytes")
     try:
         if len(audio_data) == 0:
             error_msg = "Audio data is empty"
             logger.error(error_msg)
-            return AudioConversionResponse(
-                success=False,
-                error_message=error_msg
-            ).dict()
+            raise RuntimeError(error_msg)
+            # return AudioConversionResponse(
+            #     success=False,
+            #     error_message=error_msg
+            # ).dict()
+            # return EmbeddedResource(
+            #     type="resource",
+            #     resource=BlobResourceContents(
+            #         mimeType="text/plain",
+            #         text=error_msg
+            #     )
+            # )
 
         audio = None
         original_info = None
@@ -387,10 +422,18 @@ def convert_audio_bytes(audio_data: bytes, target_sample_rate: int = 16000, targ
                 error_msg = f"Both pydub and built-in WAV processing failed: {e}"
                 logger.error(error_msg)
                 logger.error(f"Full traceback: {traceback.format_exc()}")
-                return AudioConversionResponse(
-                    success=False,
-                    error_message=error_msg
-                ).dict()
+                raise RuntimeError(error_msg)
+                # return AudioConversionResponse(
+                #     success=False,
+                #     error_message=error_msg
+                # ).dict()
+                # return EmbeddedResource(
+                #     type="resource",
+                #     resource=BlobResourceContents(
+                #         mimeType="text/plain",
+                #         text=error_msg
+                #     )
+                # )
 
         logger.info(f"Original audio format - Channels: {audio.channels}, Frame rate: {audio.frame_rate}, Sample width: {audio.sample_width}, Duration: {len(audio)}ms")
         conversion_performed = False
@@ -427,22 +470,41 @@ def convert_audio_bytes(audio_data: bytes, target_sample_rate: int = 16000, targ
         logger.info(f"Successfully exported {len(wav_data)} bytes as WAV")
         encoded_data = base64.b64encode(wav_data).decode('utf-8')
 
-        return AudioConversionResponse(
-            success=True,
-            data=encoded_data,
-            original_info=original_info,
-            converted_info=converted_info,
-            conversion_performed=conversion_performed
-        ).dict()
+        # return AudioConversionResponse(
+        #     success=True,
+        #     data=encoded_data,
+        #     original_info=original_info,
+        #     converted_info=converted_info,
+        #     conversion_performed=conversion_performed
+        # ).dict()
+        content_type = "audio/wav"
+        converted_filename = f"converted_{filename}"
+
+        blob = BlobResourceContents(
+            uri=FileUrl(f"file://{converted_filename}"),
+            blob=encoded_data,
+            mimeType=content_type
+        )
+
+        resource = EmbeddedResource(type="resource", resource=blob)
+        return (filename, resource)
 
     except Exception as e:
         error_msg = f"Unexpected error during audio conversion: {e}"
         logger.error(error_msg)
         logger.error(f"Full traceback: {traceback.format_exc()}")
-        return AudioConversionResponse(
-            success=False,
-            error_message=error_msg
-        ).dict()
+        raise RuntimeError(error_msg)
+        # return AudioConversionResponse(
+        #     success=False,
+        #     error_message=error_msg
+        # ).dict()
+        # return EmbeddedResource(
+        #     type="resource",
+        #     resource=BlobResourceContents(
+        #         mimeType="text/plain",
+        #         text=error_msg
+        #     )
+        # )
 
 
 @mcp.tool(
@@ -450,82 +512,340 @@ def convert_audio_bytes(audio_data: bytes, target_sample_rate: int = 16000, targ
     description="Convert base64-encoded audio data to a mono WAV file suitable for speech recognition."
 )
 def convert_to_mono_wav(
-    audio_data_base64: str,
+    audio_data: str,
+    filename: str,
     target_sample_rate: int = 16000,
     target_sample_width: int = 2
-) -> Dict[str, Any]:
+) -> tuple[str, EmbeddedResource]:
     """
     Convert audio data (base64-encoded) to mono-channel WAV format.
 
     Args:
-        audio_data_base64 (str): Base64-encoded audio data.
+        audio_data (str): Base64-encoded audio data.
+        filename (str): Name of file to be converted
         target_sample_rate (int): Target sample rate in Hz (default: 16000).
         target_sample_width (int): Target sample width in bytes (default: 2 for 16-bit).
 
     Returns:
-        Dict[str, Any]: Response containing:
-            - success (bool): Whether conversion was successful
-            - data (str, optional): Base64-encoded converted audio data
-            - original_info (AudioInfo, optional): Original audio format information
-            - converted_info (AudioInfo, optional): Converted audio format information
-            - conversion_performed (bool): Whether any conversion was necessary
-            - error_message (str): Error description if conversion failed
+        Tuple[str, list]: Response containing
     """
     try:
-        logger.info(f"Convert audio data (base64-encoded) to mono-channel WAV format: {audio_data_base64}")
-        audio_data = base64.b64decode(audio_data_base64)
+        logger.info(f"Convert audio data (base64-encoded) to mono-channel WAV format: {audio_data}")
+        audio_data_raw = base64.b64decode(audio_data)
+        logger.info(f"FileSize to convert:{len(audio_data_raw)}")
+        with open("/tmp/output.wav", "wb") as f:
+            f.write(audio_data_raw)
     except Exception as e:
         error_msg = f"Failed to decode base64 audio data: {e}"
         logger.error(error_msg)
-        return AudioConversionResponse(
-            success=False,
-            error_message=error_msg
-        ).dict()
-    return convert_audio_bytes(audio_data, target_sample_rate, target_sample_width)
+        raise RuntimeError(error_msg)
+        # return AudioConversionResponse(
+        #     success=False,
+        #     error_message=error_msg
+        # ).dict()
+    return convert_audio_bytes(filename, audio_data_raw, target_sample_rate, target_sample_width)
 
+def get_base_url():
+    return os.environ.get("CORE_BASE_URL", "https://statgpt-test.imf-eid.projects.epam.com/v1/")
+
+def is_absolute_url(url):
+    return bool(urlparse(url).netloc)
+
+# @mcp.tool(
+#     name="convert_uri_to_mono_wav",
+#     description="Fetch an audio file from a given URI and convert it to a mono WAV format optimized for speech recognition."
+# )
+# def convert_uri_to_mono_wav(
+#     audio_uri: str,
+#     target_sample_rate: int = 16000,
+#     target_sample_width: int = 2
+# ) -> Dict[str, Any]:
+#     """
+#     Download audio from URI and convert to mono-channel WAV format.
+#
+#     Args:
+#         audio_uri (str): URL to download the audio file from.
+#         target_sample_rate (int): Target sample rate in Hz (default: 16000).
+#         target_sample_width (int): Target sample width in bytes (default: 2 for 16-bit).
+#
+#     Returns:
+#         Dict[str, Any]: Response containing:
+#             - success (bool): Whether conversion was successful
+#             - data (str, optional): Base64-encoded converted audio data
+#             - original_info (AudioInfo, optional): Original audio format information
+#             - converted_info (AudioInfo, optional): Converted audio format information
+#             - conversion_performed (bool): Whether any conversion was necessary
+#             - error_message (str): Error description if conversion failed
+#     """
+#     import requests
+#     try:
+#         logger.info(f"Downloading audio file from URI: {audio_uri}")
+#         response = requests.get(audio_uri)
+#         response.raise_for_status()
+#         audio_data = response.content
+#     except Exception as e:
+#         error_msg = f"Failed to download audio from URI: {e}"
+#         logger.error(error_msg)
+#         return AudioConversionResponse(
+#             success=False,
+#             error_message=error_msg
+#         ).dict()
+#     return convert_audio_bytes(audio_data, target_sample_rate, target_sample_width)
+
+class ConfigurationMiddleware(Middleware):
+    """
+    Middleware to extract and validate configuration from _meta.ai_dial_config.
+
+    This middleware:
+    1. Extracts _meta.ai_dial_config from every incoming request (tool calls and list_tools)
+    2. Parses the JSON value
+    3. Validates it against TextClassificationConfig model
+    4. For list_tools: Dynamically injects tool_description into tool description
+    5. For tool calls: Stores validated config in context for tool access
+    6. Returns error if ai_dial_config is missing or invalid (for tool calls only)
+    """
+
+    # def _extract_config_from_request(self, request_data: dict) -> Optional[dict]:
+    #     """Helper method to extract ai_dial_config from request data."""
+    #     config_json = None
+    #     if isinstance(request_data, dict):
+    #         # Check for _meta in params (MCP protocol structure)
+    #         if 'params' in request_data and isinstance(request_data['params'], dict):
+    #             params = request_data['params']
+    #             if '_meta' in params and isinstance(params['_meta'], dict):
+    #                 meta = params['_meta']
+    #                 if 'ai_dial_config' in meta:
+    #                     config_json = meta['ai_dial_config']
+    #                     logger.debug("ConfigurationMiddleware: Found ai_dial_config in params._meta")
+    #
+    #         # Also check for _meta at top level (alternative structure)
+    #         elif '_meta' in request_data and isinstance(request_data['_meta'], dict):
+    #             meta = request_data['_meta']
+    #             if 'ai_dial_config' in meta:
+    #                 config_json = meta['ai_dial_config']
+    #                 logger.debug("ConfigurationMiddleware: Found ai_dial_config in top-level _meta")
+    #
+    #     return config_json
+
+    # def _parse_and_validate_config(self, config_json) -> tuple[Optional[TextClassificationConfig], Optional[dict]]:
+    #     """
+    #     Helper method to parse and validate configuration.
+    #
+    #     Returns:
+    #         tuple: (config, error_dict) where error_dict is None if successful
+    #     """
+    #     if config_json is None:
+    #         return None, None
+    #
+    #     # Parse JSON if it's a string
+    #     parsed_json = config_json
+    #     if isinstance(config_json, str):
+    #         try:
+    #             parsed_json = json.loads(config_json)
+    #             logger.debug("ConfigurationMiddleware: Parsed JSON string from ai_dial_config")
+    #         except json.JSONDecodeError as e:
+    #             logger.error(f"ConfigurationMiddleware: Invalid JSON in ai_dial_config: {e}")
+    #             return None, {
+    #                 "error": "Invalid JSON in ai_dial_config",
+    #                 "message": f"Failed to parse JSON: {str(e)}"
+    #             }
+    #
+    #     # Validate against the configuration model
+    #     try:
+    #         config = TextClassificationConfig(**parsed_json)
+    #         logger.info(f"ConfigurationMiddleware: Validated configuration - endpoint: {config.hf_endpoint}, model: {config.model_name}")
+    #         return config, None
+    #     except ValidationError as e:
+    #         logger.error(f"ConfigurationMiddleware: Validation error: {e}")
+    #         return None, {
+    #             "error": "Invalid configuration",
+    #             "message": f"Configuration validation failed: {e.errors()}",
+    #             "schema": get_config_schema()
+    #         }
+
+    async def on_list_tools(self, context: MiddlewareContext, call_next) -> Sequence[Tool]:
+        """
+        Intercept list_tools requests to dynamically inject tool_description from config.
+
+        If _meta.ai_dial_config contains tool_description, it will be used to
+        override the tool's description in the response.
+        """
+        logger.debug("ConfigurationMiddleware: Processing list_tools request")
+
+        try:
+            # Get the HTTP request to access the request body
+            request = get_http_request()
+
+            # Parse the JSON request body
+            request_data = await request.json()
+
+            # Extract _meta.ai_dial_config
+            # config_json = self._extract_config_from_request(request_data)
+            config_json = request_data
+
+            # Get the original tool list
+            tools = await call_next(context)
+
+            # If configuration is provided and contains tool_description, transform the tool
+            if config_json:
+                config, _ = self._parse_and_validate_config(config_json)
+
+                if config and config.tool_description:
+                    logger.info(f"ConfigurationMiddleware: Injecting tool_description into list_tools response")
+
+                    # Find the classify_text tool and transform it with the new description
+                    transformed_tools = []
+                    for tool in tools:
+                        # if tool.name == "classify_text":
+                        #     # Create a transformed version with the new description
+                        #     transformed_tool = Tool.from_tool(
+                        #         tool,
+                        #         description=config.tool_description
+                        #     )
+                        #     transformed_tools.append(transformed_tool)
+                        #     logger.debug(f"ConfigurationMiddleware: Transformed tool '{tool.name}' with custom description")
+                        # else:
+                            transformed_tools.append(tool)
+
+                    return transformed_tools
+
+            # Return original tools if no configuration or no tool_description
+            return tools
+
+        except RuntimeError as e:
+            # get_http_request() may not be available in all contexts
+            logger.warning(f"ConfigurationMiddleware: get_http_request() not available in list_tools: {e}")
+            # Return original tools
+            return await call_next(context)
+        except Exception as e:
+            logger.error(f"ConfigurationMiddleware: Unexpected error in list_tools: {type(e).__name__}: {e}", exc_info=True)
+            # Return original tools on error
+            return await call_next(context)
+
+    async def on_call_tool(self, context: MiddlewareContext, call_next):
+        """Extract and validate configuration from _meta.ai_dial_config."""
+        logger.debug("ConfigurationMiddleware: Processing tool call")
+
+        try:
+            # Get the HTTP request to access the request body
+            request = get_http_request()
+
+            # Parse the JSON request body
+            request_data = await request.json()
+
+            # Extract _meta.ai_dial_config using helper method
+            config_json = self._extract_config_from_request(request_data)
+
+            # Check if configuration is provided
+            if config_json is None:
+                logger.error("ConfigurationMiddleware: Missing _meta.ai_dial_config")
+                # Store None to indicate missing config - tool will handle error
+                if hasattr(context, 'fastmcp_context'):
+                    context.fastmcp_context.set_state("config", None)
+                    context.fastmcp_context.set_state("config_error", {
+                        "error": "Missing configuration",
+                        "message": "Please provide _meta.ai_dial_config in the request. Use GET /configuration to get the schema."
+                    })
+                return await call_next(context)
+
+            # Parse and validate configuration using helper method
+            config, config_error = self._parse_and_validate_config(config_json)
+
+            if config is None:
+                # Invalid configuration - store error
+                if hasattr(context, 'fastmcp_context'):
+                    context.fastmcp_context.set_state("config", None)
+                    if config_error:
+                        context.fastmcp_context.set_state("config_error", config_error)
+                    else:
+                        # Fallback error if parsing returned None without error details
+                        context.fastmcp_context.set_state("config_error", {
+                            "error": "Invalid configuration",
+                            "message": "Failed to parse or validate configuration"
+                        })
+                return await call_next(context)
+
+            # Store validated configuration in context
+            if hasattr(context, 'fastmcp_context'):
+                context.fastmcp_context.set_state("config", config)
+                context.fastmcp_context.set_state("config_error", None)
+                logger.debug("ConfigurationMiddleware: Stored configuration in context")
+
+        except RuntimeError as e:
+            # get_http_request() may not be available in all contexts
+            logger.warning(f"ConfigurationMiddleware: get_http_request() not available: {e}")
+            # Continue without configuration extraction
+        except Exception as e:
+            logger.error(f"ConfigurationMiddleware: Unexpected error: {type(e).__name__}: {e}", exc_info=True)
+            # Continue and let the tool handle the missing config
+
+        # Continue with the request
+        return await call_next(context)
+
+
+# Add the middleware to the server
+# mcp.add_middleware(ConfigurationMiddleware())
 
 @mcp.tool(
     name="convert_uri_to_mono_wav",
-    description="Fetch an audio file from a given URI and convert it to a mono WAV format optimized for speech recognition."
+    # description="Fetch an audio file from a given URI and convert it to a mono WAV format optimized for speech recognition."
 )
 def convert_uri_to_mono_wav(
-    audio_uri: str,
-    target_sample_rate: int = 16000,
-    target_sample_width: int = 2
-) -> Dict[str, Any]:
+        audio_uri: Annotated[
+            str,
+            Field(
+                title="DIAL URI to audio file",
+                description="DIAL URI to audio file",
+                json_schema_extra={"dial_url": True},
+            ),
+        ],
+        target_sample_rate: int = 16000,
+        target_sample_width: int = 2,
+) -> tuple[str, EmbeddedResource]:
     """
-    Download audio from URI and convert to mono-channel WAV format.
-
-    Args:
-        audio_uri (str): URL to download the audio file from.
-        target_sample_rate (int): Target sample rate in Hz (default: 16000).
-        target_sample_width (int): Target sample width in bytes (default: 2 for 16-bit).
-
-    Returns:
-        Dict[str, Any]: Response containing:
-            - success (bool): Whether conversion was successful
-            - data (str, optional): Base64-encoded converted audio data
-            - original_info (AudioInfo, optional): Original audio format information
-            - converted_info (AudioInfo, optional): Converted audio format information
-            - conversion_performed (bool): Whether any conversion was necessary
-            - error_message (str): Error description if conversion failed
+    Download audio from DIAL URI and convert to mono-channel WAV format.
+    Logs all incoming HTTP headers, passes Authorization header to download,
+    and prepends CORE_BASE_URL if URI is not absolute.
     """
-    import requests
     try:
-        logger.info(f"Downloading audio file from URI: {audio_uri}")
-        response = requests.get(audio_uri)
+        # Extract API key from X-API-KEY header
+        headers = get_http_headers()
+        api_key = headers.get("api-key")
+
+        # 1. Log all incoming HTTP headers
+        logger.info("Incoming HTTP headers:")
+        for k, v in headers.items():
+            logger.info(f"  {k}: {v}")
+
+        # 2. Pass Authorization header if present
+        new_headers = {}
+        if "api-key" in headers:
+            new_headers["api-key"] = headers["api-key"]
+            logger.info("Passing Authorization header to download request.")
+
+        # 3. Prepend CORE_BASE_URL if URI is not absolute
+        base_url = get_base_url()
+        if not is_absolute_url(audio_uri) and base_url:
+            full_uri = urljoin(base_url, audio_uri)
+            logger.info(f"Prepended CORE_BASE_URL: {base_url} + {audio_uri} -> {full_uri}")
+        else:
+            full_uri = audio_uri
+
+        logger.info(f"Downloading audio file from URI: {full_uri}")
+        response = requests.get(full_uri, headers=new_headers)
         response.raise_for_status()
         audio_data = response.content
     except Exception as e:
         error_msg = f"Failed to download audio from URI: {e}"
         logger.error(error_msg)
-        return AudioConversionResponse(
-            success=False,
-            error_message=error_msg
-        ).dict()
-    return convert_audio_bytes(audio_data, target_sample_rate, target_sample_width)
+        raise RuntimeError(error_msg)
+        # return AudioConversionResponse(
+        #     success=False,
+        #     error_message=error_msg
+        # ).dict()
+    return convert_audio_bytes("converted", audio_data, target_sample_rate, target_sample_width)
 
-@mcp.tool()
+# @mcp.tool()
 def validate_audio_format(audio_data_base64: str) -> Dict[str, Any]:
     """
     Validate and analyze audio format without conversion.
@@ -614,10 +934,7 @@ def validate_audio_format(audio_data_base64: str) -> Dict[str, Any]:
         error_msg = f"Unexpected error during audio validation: {e}"
         logger.error(error_msg)
         logger.error(f"Full traceback: {traceback.format_exc()}")
-        return {
-            "success": False,
-            "error_message": error_msg
-        }
+        raise RuntimeError(error_msg)
 
 
 def setup_health_endpoint():
