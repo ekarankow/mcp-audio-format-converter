@@ -57,6 +57,34 @@ class AudioInfo(BaseModel):
     format: str
 
 
+# Output format support
+SUPPORTED_OUTPUT_FORMATS = ("wav", "mp3", "flac", "ogg")
+OUTPUT_MIME_TYPES = {
+    "wav": "audio/wav",
+    "mp3": "audio/mpeg",
+    "flac": "audio/flac",
+    "ogg": "audio/ogg",
+}
+
+
+def normalize_output_format(output_format: Optional[str]) -> Optional[str]:
+    """Normalize and validate the requested output format."""
+    if not output_format:
+        return None
+    normalized = output_format.strip().lower()
+    if normalized.startswith("."):
+        normalized = normalized[1:]
+    if normalized in SUPPORTED_OUTPUT_FORMATS:
+        return normalized
+    return None
+
+
+def build_converted_filename(filename: str, output_format: str) -> str:
+    """Build a converted filename with the requested output format."""
+    stem = Path(filename).stem or "converted"
+    return f"converted_{stem}.{output_format}"
+
+
 # class AudioConversionResponse(BaseModel):
 #     """Response model for audio conversion."""
 #     success: bool
@@ -184,14 +212,14 @@ class SimpleAudioSegment:
             os.unlink(temp_path)
 
 
-def get_audio_info(audio_segment) -> AudioInfo:
+def get_audio_info(audio_segment, format: str = "wav") -> AudioInfo:
     """Extract audio information from audio segment."""
     return AudioInfo(
         channels=audio_segment.channels,
         frame_rate=audio_segment.frame_rate,
         sample_width=audio_segment.sample_width,
         duration_ms=len(audio_segment),
-        format="wav"
+        format=format
     )
 
 
@@ -355,15 +383,22 @@ def get_audio_info(audio_segment) -> AudioInfo:
 #             error_message=error_msg
 #         ).dict()
 
-def convert_audio_bytes(filename: str, audio_data: bytes, target_sample_rate: int = 16000, target_sample_width: int = 2) -> tuple[str, EmbeddedResource]:
+def convert_audio_bytes(
+    filename: str,
+    audio_data: bytes,
+    target_sample_rate: int = 16000,
+    target_sample_width: int = 2,
+    output_format: str = "wav"
+) -> tuple[str, EmbeddedResource]:
     """
-    Core logic for converting audio bytes to mono-channel WAV format.
+    Core logic for converting audio bytes to mono-channel format.
 
     Args:
         filename (str): Name of file to be converted
         audio_data (bytes): Raw audio data.
         target_sample_rate (int): Target sample rate in Hz.
         target_sample_width (int): Target sample width in bytes.
+        output_format (str): Output audio format (e.g. wav, mp3).
 
     Returns:
         Tuple[str, list]: Audio conversion response.
@@ -385,6 +420,10 @@ def convert_audio_bytes(filename: str, audio_data: bytes, target_sample_rate: in
             #         text=error_msg
             #     )
             # )
+
+        normalized_format = normalize_output_format(output_format) or "wav"
+        if normalized_format not in SUPPORTED_OUTPUT_FORMATS:
+            raise ValueError(f"Unsupported output format: {output_format}")
 
         audio = None
         original_info = None
@@ -417,7 +456,7 @@ def convert_audio_bytes(filename: str, audio_data: bytes, target_sample_rate: in
                 logger.info("Attempting built-in WAV processing")
                 audio = load_wav_with_builtin(audio_data)
                 logger.info("Successfully loaded audio with built-in WAV processing")
-                original_info = get_audio_info(audio)
+                original_info = get_audio_info(audio, format="wav")
             except Exception as e:
                 error_msg = f"Both pydub and built-in WAV processing failed: {e}"
                 logger.error(error_msg)
@@ -459,16 +498,16 @@ def convert_audio_bytes(filename: str, audio_data: bytes, target_sample_rate: in
         else:
             logger.info(f"Audio is already at target sample width ({target_sample_width} bytes)")
 
-        converted_info = get_audio_info(audio)
+        converted_info = get_audio_info(audio, format=normalized_format)
         logger.info(f"Final audio format - Channels: {audio.channels}, Frame rate: {audio.frame_rate}, Sample width: {audio.sample_width}, Duration: {len(audio)}ms")
 
         if hasattr(audio, 'export'):
-            wav_data = audio.export(format="wav").read()
+            converted_data = audio.export(format=normalized_format).read()
         else:
-            wav_data = audio.export_bytes("wav")
+            converted_data = audio.export_bytes(normalized_format)
 
-        logger.info(f"Successfully exported {len(wav_data)} bytes as WAV")
-        encoded_data = base64.b64encode(wav_data).decode('utf-8')
+        logger.info(f"Successfully exported {len(converted_data)} bytes as {normalized_format}")
+        encoded_data = base64.b64encode(converted_data).decode('utf-8')
 
         # return AudioConversionResponse(
         #     success=True,
@@ -477,8 +516,8 @@ def convert_audio_bytes(filename: str, audio_data: bytes, target_sample_rate: in
         #     converted_info=converted_info,
         #     conversion_performed=conversion_performed
         # ).dict()
-        content_type = "audio/wav"
-        converted_filename = f"converted_{filename}"
+        content_type = OUTPUT_MIME_TYPES.get(normalized_format, "application/octet-stream")
+        converted_filename = build_converted_filename(filename, normalized_format)
 
         blob = BlobResourceContents(
             uri=FileUrl(f"file://{converted_filename}"),
@@ -509,28 +548,43 @@ def convert_audio_bytes(filename: str, audio_data: bytes, target_sample_rate: in
 
 @mcp.tool(
     name="convert_to_mono_wav",
-    description="Convert base64-encoded audio data to a mono WAV file suitable for speech recognition."
+    description="Convert base64-encoded audio data to a mono audio file suitable for speech recognition."
 )
-def convert_to_mono_wav(
+async def convert_to_mono_wav(
+    ctx: Context,
     audio_data: str,
     filename: str,
     target_sample_rate: int = 16000,
-    target_sample_width: int = 2
+    target_sample_width: int = 2,
+    output_format: Optional[str] = None
 ) -> tuple[str, EmbeddedResource]:
     """
-    Convert audio data (base64-encoded) to mono-channel WAV format.
+    Convert audio data (base64-encoded) to mono-channel format.
 
     Args:
         audio_data (str): Base64-encoded audio data.
         filename (str): Name of file to be converted
         target_sample_rate (int): Target sample rate in Hz (default: 16000).
         target_sample_width (int): Target sample width in bytes (default: 2 for 16-bit).
+        output_format (Optional[str]): Output audio format (e.g. wav, mp3).
 
     Returns:
         Tuple[str, list]: Response containing
     """
+    selected_format = normalize_output_format(output_format)
+    if selected_format is None:
+        result = await ctx.elicit(
+            message="Choose output audio format",
+            response_type=list(SUPPORTED_OUTPUT_FORMATS),
+        )
+        if result.action != "accept":
+            raise RuntimeError("Output format selection was not provided.")
+        selected_format = normalize_output_format(str(result.data))
+        if selected_format is None:
+            raise RuntimeError("Unsupported output format selected.")
+
     try:
-        logger.info(f"Convert audio data (base64-encoded) to mono-channel WAV format: {audio_data}")
+        logger.info(f"Convert audio data (base64-encoded) to mono-channel format: {audio_data}")
         audio_data_raw = base64.b64decode(audio_data)
         logger.info(f"FileSize to convert:{len(audio_data_raw)}")
         with open("/tmp/output.wav", "wb") as f:
@@ -543,7 +597,13 @@ def convert_to_mono_wav(
         #     success=False,
         #     error_message=error_msg
         # ).dict()
-    return convert_audio_bytes(filename, audio_data_raw, target_sample_rate, target_sample_width)
+    return convert_audio_bytes(
+        filename,
+        audio_data_raw,
+        target_sample_rate,
+        target_sample_width,
+        output_format=selected_format
+    )
 
 def get_base_url():
     return os.environ.get("CORE_BASE_URL", "https://statgpt-test.imf-eid.projects.epam.com/v1/")
@@ -790,7 +850,8 @@ class ConfigurationMiddleware(Middleware):
     name="convert_uri_to_mono_wav",
     # description="Fetch an audio file from a given URI and convert it to a mono WAV format optimized for speech recognition."
 )
-def convert_uri_to_mono_wav(
+async def convert_uri_to_mono_wav(
+        ctx: Context,
         audio_uri: Annotated[
             str,
             Field(
@@ -801,12 +862,25 @@ def convert_uri_to_mono_wav(
         ],
         target_sample_rate: int = 16000,
         target_sample_width: int = 2,
+        output_format: Optional[str] = None,
 ) -> tuple[str, EmbeddedResource]:
     """
-    Download audio from DIAL URI and convert to mono-channel WAV format.
+    Download audio from DIAL URI and convert to mono-channel format.
     Logs all incoming HTTP headers, passes Authorization header to download,
     and prepends CORE_BASE_URL if URI is not absolute.
     """
+    selected_format = normalize_output_format(output_format)
+    if selected_format is None:
+        result = await ctx.elicit(
+            message="Choose output audio format",
+            response_type=list(SUPPORTED_OUTPUT_FORMATS),
+        )
+        if result.action != "accept":
+            raise RuntimeError("Output format selection was not provided.")
+        selected_format = normalize_output_format(str(result.data))
+        if selected_format is None:
+            raise RuntimeError("Unsupported output format selected.")
+
     try:
         # Extract API key from X-API-KEY header
         headers = get_http_headers()
@@ -843,7 +917,13 @@ def convert_uri_to_mono_wav(
         #     success=False,
         #     error_message=error_msg
         # ).dict()
-    return convert_audio_bytes("converted", audio_data, target_sample_rate, target_sample_width)
+    return convert_audio_bytes(
+        "converted",
+        audio_data,
+        target_sample_rate,
+        target_sample_width,
+        output_format=selected_format
+    )
 
 # @mcp.tool()
 def validate_audio_format(audio_data_base64: str) -> Dict[str, Any]:
