@@ -18,6 +18,7 @@ import base64
 import wave
 import audioop
 from mcp.server.fastmcp import FastMCP
+from mcp.server.transport_security import TransportSecuritySettings
 from mcp.types import BlobResourceContents, EmbeddedResource
 from pydantic import BaseModel, FileUrl
 from fastapi import Request, Depends
@@ -37,7 +38,10 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Create the MCP server instance
-mcp = FastMCP("Audio Format Converter MCP Server")
+mcp = FastMCP("Audio Format Converter MCP Server",
+              transport_security=TransportSecuritySettings(
+                  enable_dns_rebinding_protection=False
+              ),)
 
 
 class AudioInfo(BaseModel):
@@ -564,10 +568,10 @@ def is_absolute_url(url):
 #         ).dict()
 #     return convert_audio_bytes(audio_data, target_sample_rate, target_sample_width)
 
-# @mcp.tool(
-#     name="convert_uri_to_mono_wav",
-#     description="Fetch an audio file from a given URI and convert it to a mono WAV format optimized for speech recognition."
-# )
+@mcp.tool(
+    name="convert_uri_to_mono_wav",
+    description="Fetch an audio file from a given URI and convert it to a mono WAV format optimized for speech recognition."
+)
 def convert_uri_to_mono_wav(
         audio_uri: str,
         target_sample_rate: int = 16000,
