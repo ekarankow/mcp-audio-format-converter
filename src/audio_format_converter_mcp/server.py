@@ -487,7 +487,7 @@ def convert_audio_bytes(filename: str, audio_data: bytes, target_sample_rate: in
     description="Convert base64-encoded audio data to a mono WAV file suitable for speech recognition."
 )
 def convert_to_mono_wav(
-    audio_data_base64: str,
+    audio_data: str,
     # filename: str,
     target_sample_rate: int = 16000,
     target_sample_width: int = 2
